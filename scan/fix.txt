@@ -1,0 +1,12 @@
+#### insert this def to last of dqn_agent.py
+
+    def load(self, model_path):
+        if os.path.exists(model_path):
+            self.model = tf.keras.models.load_model(model_path)
+            self.target_model = tf.keras.models.load_model(model_path)
+            print(f"[*] Model loaded successfully from {model_path}")
+            return True
+        return False
+        
+        
+

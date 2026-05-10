@@ -1,0 +1,11 @@
+tensorflow>=2.15.0
+matplotlib>=3.7.0
+scapy>=2.5.0
+requests>=2.31.0
+pandas>=2.0.0
+
+numpy>=1.24.0
+seaborn>=0.12.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.110.0

@@ -1,0 +1,242 @@
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import pandas as pd
+import os
+import argparse
+import seaborn as sns
+import numpy as np
+import warnings
+import matplotlib.gridspec as gridspec
+from config.env_config import Config
+
+# Suppress unnecessary warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# Professional Color Palette
+COLORS = {
+    "reward": "#3498db",
+    "trend": "#2980b9",
+    "success": "#27ae60",
+    "alert": "#e74c3c",
+    "epsilon": "#f39c12",
+    "bg": "#fdfefe",
+}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["episode", "step"], default="episode")
+    parser.add_argument("--interval", type=int, default=2000)
+    return parser.parse_args()
+
+
+class LiveMonitor:
+    def __init__(self, mode, interval):
+        self.mode = mode
+        self.interval = interval
+        self.save_dir = Config().OUTPUT_DIR
+        self.log_file_ep = os.path.join(
+            self.save_dir, "training_results", "training_log.csv"
+        )
+        self.log_file_step = os.path.join(
+            self.save_dir, "training_results", "step_log.csv"
+        )
+
+        try:
+            sns.set_theme(style="whitegrid")
+        except:
+            plt.style.use("ggplot")
+
+        if self.mode == "episode":
+            self.fig = plt.figure(
+                "Episode Performance Monitor", figsize=(12, 10), facecolor=COLORS["bg"]
+            )
+            self.setup_episode_layout()
+        else:
+            self.fig_main = plt.figure(
+                "Step Performance & Logs", figsize=(11, 9), facecolor=COLORS["bg"]
+            )
+            self.fig_anal = plt.figure(
+                "Attack Analytics", figsize=(10, 8), facecolor=COLORS["bg"]
+            )
+            self.setup_step_layout()
+
+    def setup_episode_layout(self):
+        self.gs = gridspec.GridSpec(3, 1, hspace=0.4)
+        self.ax_rew = self.fig.add_subplot(self.gs[0])
+        self.ax_eps = self.fig.add_subplot(self.gs[1])
+        self.ax_alr = self.fig.add_subplot(self.gs[2])
+
+    def setup_step_layout(self):
+        # Main Window
+        self.gs_main = gridspec.GridSpec(3, 1, height_ratios=[1, 1, 0.7], hspace=0.5)
+        self.ax_srew = self.fig_main.add_subplot(self.gs_main[0])
+        self.ax_ssuc = self.fig_main.add_subplot(self.gs_main[1])
+        self.ax_slog = self.fig_main.add_subplot(self.gs_main[2])
+        self.ax_slog.axis("off")
+
+        # Analytics Window
+        self.gs_anal = gridspec.GridSpec(2, 1, hspace=0.5)
+        self.ax_sdist = self.fig_anal.add_subplot(self.gs_anal[0])
+        self.ax_sheat = self.fig_anal.add_subplot(self.gs_anal[1])
+
+    def animate(self, i):
+        target = self.log_file_ep if self.mode == "episode" else self.log_file_step
+        if not os.path.exists(target):
+            return
+
+        try:
+            df = pd.read_csv(target)
+            if df.empty:
+                return
+
+            if self.mode == "episode":
+                self.update_episode(df)
+            else:
+                self.update_step(df)
+        except Exception as e:
+            pass
+
+    def update_episode(self, df):
+        x = df["episode"]
+
+        # Reward
+        self.ax_rew.clear()
+        self.ax_rew.plot(
+            x, df["reward"], color=COLORS["reward"], marker="o", markersize=4, alpha=0.5
+        )
+        if len(df) >= 5:
+            self.ax_rew.plot(
+                x,
+                df["reward"].rolling(5).mean(),
+                color=COLORS["trend"],
+                linewidth=2.5,
+                label="Trend",
+            )
+        self.ax_rew.set_title("Episode Reward Progression", fontweight="bold")
+        self.ax_rew.set_ylabel("Total Reward")
+        self.ax_rew.legend(loc="upper left")
+
+        # Epsilon
+        self.ax_eps.clear()
+        self.ax_eps.fill_between(x, df["epsilon"], color=COLORS["epsilon"], alpha=0.15)
+        self.ax_eps.plot(x, df["epsilon"], color=COLORS["epsilon"], linewidth=2)
+        self.ax_eps.set_title("Exploration Rate (Epsilon)", fontweight="bold")
+        self.ax_eps.set_ylabel("Epsilon")
+
+        # Alerts
+        self.ax_alr.clear()
+        self.ax_alr.bar(x, df["alerts"], color=COLORS["alert"], alpha=0.7)
+        self.ax_alr.set_title("IDS Alerts Detected", fontweight="bold")
+        self.ax_alr.set_xlabel("Episode Number")
+        self.ax_alr.set_ylabel("Alert Count")
+
+    def update_step(self, df):
+        df["global_step"] = range(1, len(df) + 1)
+        x = df["global_step"]
+
+        # 1. Step Reward
+        self.ax_srew.clear()
+        self.ax_srew.plot(x, df["reward"], color=COLORS["reward"], alpha=0.3)
+        if len(df) >= 20:
+            self.ax_srew.plot(
+                x, df["reward"].rolling(20).mean(), color=COLORS["trend"], linewidth=2
+            )
+        self.ax_srew.set_title("Real-time Step Reward", fontweight="bold")
+
+        # 2. Success Rate
+        self.ax_ssuc.clear()
+        suc_rate = df["success"].expanding().mean() * 100
+        self.ax_ssuc.plot(x, suc_rate, color=COLORS["success"], linewidth=2.5)
+        self.ax_ssuc.fill_between(x, suc_rate, color=COLORS["success"], alpha=0.1)
+        self.ax_ssuc.set_title("Cumulative Success Rate (%)", fontweight="bold")
+        self.ax_ssuc.set_ylim(-5, 105)
+
+        # 3. Log
+        self.ax_slog.clear()
+        self.ax_slog.axis("off")
+        recent = df.tail(6)
+        log_lines = ["--- LIVE EVENT LOG ---"]
+        for _, r in recent.iterrows():
+            st = "OK" if r["success"] else "FAIL"
+            log_lines.append(
+                f"Ep {int(r['episode'])} Step {int(r['step'])}: {r['attack_name'][:12]:<12} | R:{r['reward']:>5.2f} | {st}"
+            )
+
+        self.ax_slog.text(
+            0.5,
+            0.5,
+            "\n".join(log_lines),
+            transform=self.ax_slog.transAxes,
+            ha="center",
+            va="center",
+            family="monospace",
+            fontsize=10,
+            fontweight="bold",
+            bbox=dict(
+                boxstyle="round,pad=0.5",
+                facecolor="#ffffff",
+                alpha=0.9,
+                edgecolor="#bdc3c7",
+            ),
+        )
+
+        # 4. Analytics: Distribution
+        self.ax_sdist.clear()
+        if "attack_name" in df.columns:
+            sns.boxplot(
+                x="attack_name",
+                y="reward",
+                data=df,
+                ax=self.ax_sdist,
+                palette="Set2",
+                hue="attack_name",
+                legend=False,
+            )
+            self.ax_sdist.set_title(
+                "Reward Distribution per Attack Type", fontweight="bold"
+            )
+            plt.setp(self.ax_sdist.get_xticklabels(), rotation=20)
+
+        # 5. Analytics: Heatmap
+        self.ax_sheat.clear()
+        if len(df["episode"].unique()) > 1:
+            pivot = df.pivot_table(
+                index="attack_name", columns="episode", values="alerts", aggfunc="sum"
+            ).fillna(0)
+            if pivot.shape[1] > 20:
+                pivot = pivot.iloc[:, -20:]
+            sns.heatmap(
+                pivot,
+                ax=self.ax_sheat,
+                cmap="YlOrRd",
+                annot=True,
+                fmt=".0f",
+                cbar=False,
+            )
+            self.ax_sheat.set_title(
+                "Attack Noise (Alerts per Episode)", fontweight="bold"
+            )
+
+    def run(self):
+        ani = FuncAnimation(
+            self.fig if self.mode == "episode" else self.fig_main,
+            self.animate,
+            interval=self.interval,
+            cache_frame_data=False,
+        )
+        if self.mode == "step":
+            # For multi-window, keep reference
+            self.ani_anal = FuncAnimation(
+                self.fig_anal,
+                self.animate,
+                interval=self.interval,
+                cache_frame_data=False,
+            )
+        plt.show()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    monitor = LiveMonitor(args.mode, args.interval)
+    monitor.run()
